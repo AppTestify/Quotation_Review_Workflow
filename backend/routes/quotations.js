@@ -8,6 +8,7 @@ const User = require('../models/User');
 const { auth, requireRole } = require('../middleware/auth');
 const { sendEmail, emailTemplates } = require('../utils/emailService');
 const { generatePDFFromHTML } = require('../utils/pdfGenerator');
+const { extractDateFromPDF, calculateDueDate } = require('../utils/pdfDateExtractor');
 
 const router = express.Router();
 
@@ -211,6 +212,28 @@ router.post('/upload', auth, requireRole('seller'), upload.single('pdf'), async 
       return res.status(400).json({ message: 'Please provide either a PDF file or HTML content' });
     }
 
+    // Extract issued date from PDF using OCR (only for uploaded PDFs, not generated ones)
+    let issuedDate = null;
+    let dueDate = null;
+    
+    if (req.file && fs.existsSync(req.file.path)) {
+      try {
+        console.log('Extracting date from PDF:', req.file.path);
+        issuedDate = await extractDateFromPDF(req.file.path);
+        
+        if (issuedDate) {
+          console.log('Extracted issued date:', issuedDate);
+          dueDate = calculateDueDate(issuedDate);
+          console.log('Calculated due date (45 days later):', dueDate);
+        } else {
+          console.log('No date found in PDF');
+        }
+      } catch (error) {
+        console.error('Error extracting date from PDF:', error);
+        // Don't fail the upload if date extraction fails
+      }
+    }
+
     // Check if quotation already exists
     let quotation = await Quotation.findOne({ documentNumber });
 
@@ -230,6 +253,12 @@ router.post('/upload', auth, requireRole('seller'), upload.single('pdf'), async 
       quotation.versions.push(versionData);
       quotation.currentVersion = version;
       quotation.status = 'Submitted';
+      
+      // Update issued date and due date if extracted
+      if (issuedDate) {
+        quotation.issuedDate = issuedDate;
+        quotation.dueDate = dueDate;
+      }
       
       // Add history entries
       addHistoryEntry(
@@ -266,7 +295,9 @@ router.post('/upload', auth, requireRole('seller'), upload.single('pdf'), async 
         status: 'Submitted',
         versions: [versionData],
         createdBy: req.user._id,
-        history: []
+        history: [],
+        issuedDate: issuedDate || null,
+        dueDate: dueDate || null
       });
       
       // Add history entry for creation

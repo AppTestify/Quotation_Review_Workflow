@@ -139,6 +139,14 @@ const quotationSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  issuedDate: {
+    type: Date,
+    default: null
+  },
+  dueDate: {
+    type: Date,
+    default: null
+  },
   history: [historySchema]
 }, {
   timestamps: true
