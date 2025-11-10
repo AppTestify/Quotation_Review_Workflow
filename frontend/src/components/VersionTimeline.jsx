@@ -39,9 +39,24 @@ const VersionTimeline = ({ versions }) => {
                       </p>
                     )}
                     {version.comments && (
-                      <p className="text-sm text-gray-600 mt-2 bg-gray-50 p-2 rounded">
-                        {version.comments}
-                      </p>
+                      <div className="mt-2 space-y-2">
+                        {Array.isArray(version.comments) ? (
+                          version.comments.map((comment, commentIdx) => (
+                            <div key={commentIdx} className="bg-gray-50 p-2 rounded">
+                              <p className="text-sm text-gray-600">{comment.text}</p>
+                              {comment.addedBy && (
+                                <p className="text-xs text-gray-500 mt-1">
+                                  - {comment.addedBy.name} ({format(new Date(comment.addedAt), 'MMM d, yyyy HH:mm')})
+                                </p>
+                              )}
+                            </div>
+                          ))
+                        ) : (
+                          <p className="text-sm text-gray-600 bg-gray-50 p-2 rounded">
+                            {version.comments}
+                          </p>
+                        )}
+                      </div>
                     )}
                   </div>
                   <div className="text-right text-sm whitespace-nowrap text-gray-500">

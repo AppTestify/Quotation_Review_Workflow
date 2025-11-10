@@ -133,8 +133,15 @@ const SellerDashboard = () => {
                           <div className="mt-2">
                             <p className="text-xs text-gray-500">
                               Latest comment:{' '}
-                              {quotation.versions[quotation.versions.length - 1].comments ||
-                                'No comments yet'}
+                              {(() => {
+                                const latestComments = quotation.versions[quotation.versions.length - 1].comments;
+                                if (Array.isArray(latestComments) && latestComments.length > 0) {
+                                  return latestComments[latestComments.length - 1].text;
+                                } else if (latestComments) {
+                                  return latestComments;
+                                }
+                                return 'No comments yet';
+                              })()}
                             </p>
                           </div>
                         )}

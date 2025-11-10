@@ -24,7 +24,7 @@ const QuotationDetail = () => {
   const [quotation, setQuotation] = useState(null);
   const [loading, setLoading] = useState(true);
   const [annotations, setAnnotations] = useState([]);
-  const [comments, setComments] = useState('');
+  const [comments, setComments] = useState([]);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editData, setEditData] = useState(null);
@@ -52,7 +52,14 @@ const QuotationDetail = () => {
       const latest = quotation.versions[quotation.versions.length - 1];
       setActiveVersion(latest);
       setAnnotations(latest.annotations || []);
-      setComments(latest.comments || '');
+      // Handle both array and string (for backward compatibility)
+      if (Array.isArray(latest.comments)) {
+        setComments(latest.comments);
+      } else if (latest.comments) {
+        setComments([{ text: latest.comments, addedBy: { name: 'Unknown' }, addedAt: new Date() }]);
+      } else {
+        setComments([]);
+      }
     }
   }, [quotation]);
 
@@ -80,13 +87,25 @@ const QuotationDetail = () => {
 
   const handleSaveAnnotations = async () => {
     try {
-      await annotateQuotation(id, comments, annotations);
+      await annotateQuotation(id, null, annotations);
       await fetchQuotation();
       await fetchActivityHistory();
       alert('Annotations saved successfully!');
     } catch (error) {
       console.error('Error saving annotations:', error);
       alert('Failed to save annotations');
+    }
+  };
+
+  const handleAddComment = async (commentText) => {
+    try {
+      // Only send comment, don't send annotations (backend will preserve existing)
+      await annotateQuotation(id, commentText, undefined);
+      await fetchQuotation();
+      await fetchActivityHistory();
+    } catch (error) {
+      console.error('Error adding comment:', error);
+      alert('Failed to add comment: ' + (error.response?.data?.message || error.message));
     }
   };
 
@@ -170,7 +189,14 @@ const QuotationDetail = () => {
   const handleVersionSelect = (version) => {
     setActiveVersion(version);
     setAnnotations(version.annotations || []);
-    setComments(version.comments || '');
+    // Handle both array and string (for backward compatibility)
+    if (Array.isArray(version.comments)) {
+      setComments(version.comments);
+    } else if (version.comments) {
+      setComments([{ text: version.comments, addedBy: { name: 'Unknown' }, addedAt: new Date() }]);
+    } else {
+      setComments([]);
+    }
   };
 
   if (loading) {
@@ -330,7 +356,7 @@ const QuotationDetail = () => {
             <CommentSidebar
               comments={comments}
               annotations={annotations}
-              onAddComment={isBuyer && !isApproved ? setComments : undefined}
+              onAddComment={isBuyer && !isApproved ? handleAddComment : undefined}
             />
           </div>
         </div>

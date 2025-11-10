@@ -28,11 +28,15 @@ export const uploadQuotation = async (formData) => {
   return response.data;
 };
 
-export const annotateQuotation = async (id, comments, annotations) => {
-  const response = await axios.post(`/api/quotations/${id}/annotate`, {
-    comments,
-    annotations
-  });
+export const annotateQuotation = async (id, comment, annotations) => {
+  const payload = {};
+  if (comment !== null && comment !== undefined) {
+    payload.comment = comment;
+  }
+  if (annotations !== null && annotations !== undefined) {
+    payload.annotations = annotations;
+  }
+  const response = await axios.post(`/api/quotations/${id}/annotate`, payload);
   return response.data;
 };
 

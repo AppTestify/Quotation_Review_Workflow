@@ -60,10 +60,21 @@ const versionSchema = new mongoose.Schema({
     type: String,
     default: null
   },
-  comments: {
-    type: String,
-    default: ''
-  },
+  comments: [{
+    text: {
+      type: String,
+      required: true
+    },
+    addedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    addedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
   uploadedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',

@@ -15,33 +15,48 @@ const seedUsers = async () => {
     // Clear existing users (optional - comment out if you want to keep existing users)
     // await User.deleteMany({});
 
-    // Create test users
-    const seller = await User.findOne({ email: 'seller@test.com' });
-    if (!seller) {
-      const newSeller = new User({
-        name: 'Test Seller',
-        email: 'seller@test.com',
-        password: 'seller123',
-        role: 'seller'
-      });
-      await newSeller.save();
-      console.log('✅ Seller user created: seller@test.com / seller123');
-    } else {
-      console.log('ℹ️  Seller user already exists: seller@test.com / seller123');
-    }
-
-    const buyer = await User.findOne({ email: 'buyer@test.com' });
+    // Create buyer first (needed for seller onboarding)
+    let buyer = await User.findOne({ email: 'buyer@test.com' });
     if (!buyer) {
-      const newBuyer = new User({
+      buyer = new User({
         name: 'Test Buyer',
         email: 'buyer@test.com',
         password: 'buyer123',
-        role: 'buyer'
+        role: 'buyer',
+        status: 'active',
+        emailVerified: true
       });
-      await newBuyer.save();
+      await buyer.save();
       console.log('✅ Buyer user created: buyer@test.com / buyer123');
     } else {
       console.log('ℹ️  Buyer user already exists: buyer@test.com / buyer123');
+    }
+
+    // Create seller and link to buyer
+    let seller = await User.findOne({ email: 'seller@test.com' });
+    if (!seller) {
+      seller = new User({
+        name: 'Test Seller',
+        email: 'seller@test.com',
+        password: 'seller123',
+        role: 'seller',
+        onboardedBy: buyer._id,
+        status: 'active',
+        emailVerified: true
+      });
+      await seller.save();
+      console.log('✅ Seller user created: seller@test.com / seller123');
+      console.log('✅ Seller linked to buyer (onboardedBy)');
+    } else {
+      // Update existing seller to link to buyer if not already linked
+      if (!seller.onboardedBy || seller.onboardedBy.toString() !== buyer._id.toString()) {
+        seller.onboardedBy = buyer._id;
+        seller.status = 'active';
+        await seller.save();
+        console.log('✅ Existing seller linked to buyer (onboardedBy)');
+      } else {
+        console.log('ℹ️  Seller user already exists and is linked: seller@test.com / seller123');
+      }
     }
 
     console.log('\n📋 Test Login Credentials:');

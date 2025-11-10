@@ -26,6 +26,8 @@ const addHistoryEntry = (quotation, action, description, performedBy, oldValue =
     metadata,
     timestamp: new Date()
   });
+  // Mark history array as modified so Mongoose saves it
+  quotation.markModified('history');
 };
 
 // Ensure uploads directory exists
@@ -117,6 +119,7 @@ router.get('/', auth, async (req, res) => {
       .populate('approvedBy', 'name email')
       .populate('versions.uploadedBy', 'name email')
       .populate('versions.reviewedBy', 'name email')
+      .populate('versions.comments.addedBy', 'name email')
       .sort({ updatedAt: -1 });
 
     res.json(quotations);
@@ -133,7 +136,8 @@ router.get('/:id', auth, async (req, res) => {
       .populate('createdBy', 'name email')
       .populate('approvedBy', 'name email')
       .populate('versions.uploadedBy', 'name email')
-      .populate('versions.reviewedBy', 'name email');
+      .populate('versions.reviewedBy', 'name email')
+      .populate('versions.comments.addedBy', 'name email');
 
     if (!quotation) {
       return res.status(404).json({ message: 'Quotation not found' });
@@ -356,63 +360,155 @@ router.get('/:id/html-content', auth, requireRole('seller'), async (req, res) =>
 // Annotate quotation (Buyer only)
 router.post('/:id/annotate', auth, requireRole('buyer'), async (req, res) => {
   try {
-    const { comments, annotations } = req.body;
-    const quotation = await Quotation.findById(req.params.id);
+    const { comment, comments, annotations } = req.body;
+    const quotationDoc = await Quotation.findById(req.params.id);
 
-    if (!quotation) {
+    if (!quotationDoc) {
       return res.status(404).json({ message: 'Quotation not found' });
     }
 
-    if (quotation.status === 'Approved') {
+    if (quotationDoc.status === 'Approved') {
       return res.status(400).json({ message: 'Cannot annotate approved quotation' });
     }
 
-    const latestVersion = quotation.versions[quotation.versions.length - 1];
+    // Convert ALL versions' comments from string to array format (for backward compatibility)
+    // This is necessary because existing quotations may have string comments or arrays with empty strings
+    // CRITICAL: We need to clean the data BEFORE Mongoose tries to validate it
+    quotationDoc.versions.forEach((version, index) => {
+      let needsUpdate = false;
+      let cleanComments = [];
+      
+      // Handle non-array values (string, null, undefined)
+      if (!Array.isArray(version.comments)) {
+        needsUpdate = true;
+        if (version.comments && typeof version.comments === 'string' && version.comments.trim()) {
+          // Convert old string comment to array format
+          const addedByUserId = version.reviewedBy || req.user._id;
+          cleanComments = [{ 
+            text: version.comments, 
+            addedBy: addedByUserId, 
+            addedAt: version.uploadedAt || new Date() 
+          }];
+        } else {
+          // Handle empty string, null, undefined, or any other non-array value
+          cleanComments = [];
+        }
+      } else {
+        // It's already an array, but check if it contains invalid elements (empty strings, etc.)
+        const hasInvalidElements = version.comments.some(item => 
+          item === '' || item === null || item === undefined || 
+          (typeof item === 'string') ||
+          (typeof item === 'object' && item !== null && !item.text)
+        );
+        
+        if (hasInvalidElements) {
+          needsUpdate = true;
+          // Build a clean array
+          for (const item of version.comments) {
+            // Skip empty strings, null, undefined
+            if (item === '' || item === null || item === undefined) {
+              continue;
+            }
+            
+            // Convert string to comment object
+            if (typeof item === 'string' && item.trim()) {
+              const addedByUserId = version.reviewedBy || req.user._id;
+              cleanComments.push({
+                text: item.trim(),
+                addedBy: addedByUserId,
+                addedAt: version.uploadedAt || new Date()
+              });
+            } 
+            // Keep valid comment objects
+            else if (typeof item === 'object' && item !== null && item.text) {
+              cleanComments.push(item);
+            }
+          }
+        } else {
+          // Array is already clean, no changes needed
+          cleanComments = version.comments;
+        }
+      }
+      
+      // Only update if we found issues
+      if (needsUpdate) {
+        // Use set() to completely replace the array
+        version.set('comments', cleanComments);
+        version.markModified('comments');
+      }
+    });
+
+    const latestVersion = quotationDoc.versions[quotationDoc.versions.length - 1];
     if (!latestVersion) {
       return res.status(400).json({ message: 'No versions found' });
     }
 
-    // Update latest version with annotations
-    const oldComments = latestVersion.comments;
-    const oldAnnotations = latestVersion.annotations;
-    latestVersion.comments = comments || latestVersion.comments;
-    latestVersion.annotations = annotations || latestVersion.annotations;
-    latestVersion.reviewedBy = req.user._id;
+    // Add new comment if provided
+    if (comment && comment.trim()) {
+      // Ensure req.user._id is a valid ObjectId
+      if (!req.user._id) {
+        return res.status(400).json({ message: 'Invalid user ID' });
+      }
+      
+      // Ensure comments is an array before pushing
+      if (!Array.isArray(latestVersion.comments)) {
+        latestVersion.comments = [];
+      }
+      
+      latestVersion.comments.push({
+        text: comment.trim(),
+        addedBy: req.user._id,
+        addedAt: new Date()
+      });
+      
+      // Mark comments array as modified (important for nested arrays in Mongoose)
+      latestVersion.markModified('comments');
 
-    // Add history entries
-    if (comments && comments !== oldComments) {
+      // Add history entry for new comment
       addHistoryEntry(
-        quotation,
+        quotationDoc,
         'commented',
-        `Comment added: ${comments.substring(0, 100)}${comments.length > 100 ? '...' : ''}`,
+        `Comment added: ${comment.trim().substring(0, 100)}${comment.trim().length > 100 ? '...' : ''}`,
         req.user._id,
-        oldComments,
-        comments,
+        null,
+        comment.trim(),
         latestVersion.version
       );
     }
+
+    // Update annotations only if explicitly provided (preserve existing if not provided)
+    const oldAnnotations = latestVersion.annotations;
+    if (annotations !== undefined && annotations !== null) {
+      latestVersion.annotations = annotations;
+      
+      // Add history entry only if annotations actually changed
+      if (JSON.stringify(annotations) !== JSON.stringify(oldAnnotations)) {
+        const annotationCount = Array.isArray(annotations) ? annotations.length : 0;
+        addHistoryEntry(
+          quotationDoc,
+          'annotations_saved',
+          `${annotationCount} annotation(s) saved`,
+          req.user._id,
+          oldAnnotations ? (Array.isArray(oldAnnotations) ? oldAnnotations.length : 0) : 0,
+          annotationCount,
+          latestVersion.version,
+          { annotationCount }
+        );
+      }
+    }
     
-    if (annotations && JSON.stringify(annotations) !== JSON.stringify(oldAnnotations)) {
-      const annotationCount = Array.isArray(annotations) ? annotations.length : 0;
-      addHistoryEntry(
-        quotation,
-        'annotations_saved',
-        `${annotationCount} annotation(s) saved`,
-        req.user._id,
-        oldAnnotations ? (Array.isArray(oldAnnotations) ? oldAnnotations.length : 0) : 0,
-        annotationCount,
-        latestVersion.version,
-        { annotationCount }
-      );
+    // Set reviewedBy if not already set or if adding a comment
+    if (!latestVersion.reviewedBy || (comment && comment.trim())) {
+      latestVersion.reviewedBy = req.user._id;
     }
 
     // Update quotation status
-    const oldStatus = quotation.status;
-    if (quotation.status === 'Submitted') {
-      quotation.status = 'Under Review';
+    const oldStatus = quotationDoc.status;
+    if (quotationDoc.status === 'Submitted') {
+      quotationDoc.status = 'Under Review';
       
       addHistoryEntry(
-        quotation,
+        quotationDoc,
         'status_changed',
         `Status changed from ${oldStatus} to Under Review`,
         req.user._id,
@@ -422,26 +518,58 @@ router.post('/:id/annotate', auth, requireRole('buyer'), async (req, res) => {
       );
     }
 
-    await quotation.save();
+    try {
+      // Mark versions array as modified to ensure nested changes are saved
+      // This is critical for Mongoose to detect changes in nested arrays
+      quotationDoc.markModified('versions');
+      
+      // Mark history as modified if we added history entries
+      if ((comment && comment.trim()) || (annotations !== undefined && annotations !== null)) {
+        quotationDoc.markModified('history');
+      }
+      
+      await quotationDoc.save();
+    } catch (saveError) {
+      console.error('Error saving quotation:', saveError);
+      console.error('Save error details:', JSON.stringify(saveError, null, 2));
+      return res.status(500).json({ 
+        message: 'Failed to save quotation', 
+        error: saveError.message,
+        details: saveError.errors || saveError
+      });
+    }
 
-    const populatedQuotation = await Quotation.findById(quotation._id)
+    const populatedQuotation = await Quotation.findById(quotationDoc._id)
       .populate('createdBy', 'name email')
       .populate('versions.uploadedBy', 'name email')
-      .populate('versions.reviewedBy', 'name email');
+      .populate('versions.reviewedBy', 'name email')
+      .populate('versions.comments.addedBy', 'name email');
+
+    if (!populatedQuotation) {
+      return res.status(500).json({ message: 'Failed to retrieve saved quotation' });
+    }
 
     // Send notification to seller if status changed
-    if (quotation.status !== oldStatus && populatedQuotation.createdBy && populatedQuotation.createdBy.email) {
+    if (quotationDoc.status !== oldStatus && populatedQuotation.createdBy && populatedQuotation.createdBy.email) {
+      const latestComment = Array.isArray(latestVersion.comments) && latestVersion.comments.length > 0
+        ? latestVersion.comments[latestVersion.comments.length - 1].text
+        : '';
       const notificationEmail = emailTemplates.quotationStatusChange(
-        quotation.title,
-        quotation.status,
-        comments,
-        quotation._id.toString()
+        quotationDoc.title,
+        quotationDoc.status,
+        latestComment,
+        quotationDoc._id.toString()
       );
-      await sendEmail(
-        populatedQuotation.createdBy.email,
-        notificationEmail.subject,
-        notificationEmail.html
-      );
+      try {
+        await sendEmail(
+          populatedQuotation.createdBy.email,
+          notificationEmail.subject,
+          notificationEmail.html
+        );
+      } catch (emailError) {
+        console.error('Error sending email notification:', emailError);
+        // Don't fail the request if email fails
+      }
     }
 
     res.json(populatedQuotation);
@@ -645,6 +773,47 @@ router.get('/:id/history', auth, async (req, res) => {
     res.json(quotation.versions);
   } catch (error) {
     console.error('Get history error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Get activity history
+router.get('/:id/activity-history', auth, async (req, res) => {
+  try {
+    const quotation = await Quotation.findById(req.params.id)
+      .populate('history.performedBy', 'name email')
+      .select('history createdBy');
+
+    if (!quotation) {
+      return res.status(404).json({ message: 'Quotation not found' });
+    }
+
+    // Check access
+    if (req.user.role === 'seller') {
+      // Sellers can only see their own quotations
+      const fullQuotation = await Quotation.findById(req.params.id).select('createdBy');
+      if (fullQuotation && fullQuotation.createdBy.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ message: 'Access denied' });
+      }
+    } else if (req.user.role === 'buyer') {
+      // Buyers can only see quotations from their onboarded suppliers
+      const fullQuotation = await Quotation.findById(req.params.id)
+        .populate('createdBy', 'onboardedBy');
+      if (fullQuotation && fullQuotation.createdBy && 
+          fullQuotation.createdBy.onboardedBy && 
+          fullQuotation.createdBy.onboardedBy.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ message: 'Access denied. This quotation is not from your onboarded supplier.' });
+      }
+    }
+
+    // Sort history by timestamp (newest first)
+    const sortedHistory = (quotation.history || []).sort((a, b) => 
+      new Date(b.timestamp) - new Date(a.timestamp)
+    );
+
+    res.json(sortedHistory);
+  } catch (error) {
+    console.error('Get activity history error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
