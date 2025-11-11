@@ -9,7 +9,6 @@ import VerifyEmail from './pages/VerifyEmail';
 import Profile from './pages/Profile';
 import SellerDashboard from './pages/SellerDashboard';
 import BuyerDashboard from './pages/BuyerDashboard';
-import Analytics from './pages/Analytics';
 import QuotationDetail from './pages/QuotationDetail';
 import SupplierManagement from './pages/SupplierManagement';
 
@@ -69,15 +68,6 @@ const AppRoutes = () => {
         element={
           <PrivateRoute requiredRole="buyer">
             <SupplierManagement />
-          </PrivateRoute>
-        }
-      />
-      
-      <Route
-        path="/buyer/analytics"
-        element={
-          <PrivateRoute requiredRole="buyer">
-            <Analytics />
           </PrivateRoute>
         }
       />

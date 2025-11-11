@@ -15,9 +15,11 @@ const BuyerDashboard = () => {
   const [statusFilter, setStatusFilter] = useState('');
   const [supplierFilter, setSupplierFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [allQuotations, setAllQuotations] = useState([]); // For analytics - all quotations without filters
 
   useEffect(() => {
     fetchSuppliers();
+    fetchAllQuotations(); // Fetch all quotations for analytics
   }, []);
 
   useEffect(() => {
@@ -49,9 +51,86 @@ const BuyerDashboard = () => {
     }
   };
 
+  const fetchAllQuotations = async () => {
+    try {
+      // Fetch all quotations without any filters for analytics
+      const data = await getQuotations();
+      setAllQuotations(data);
+    } catch (error) {
+      console.error('Error fetching all quotations for analytics:', error);
+    }
+  };
+
+  const getStatusColor = (status) => {
+    const colors = {
+      Submitted: 'bg-blue-500',
+      'Under Review': 'bg-yellow-500',
+      'Changes Requested': 'bg-orange-500',
+      Approved: 'bg-green-500'
+    };
+    return colors[status] || 'bg-gray-500';
+  };
+
   const handleViewQuotation = (id) => {
     navigate(`/quotation/${id}`);
   };
+
+  // Calculate statistics from all quotations (unfiltered) for accurate analytics
+  const calculateStats = () => {
+    const quotationsForStats = allQuotations.length > 0 ? allQuotations : quotations;
+    
+    // Group by supplier
+    const supplierMap = new Map();
+    quotationsForStats.forEach(q => {
+      const supplierId = q.createdBy?._id || q.createdBy;
+      const supplierName = q.createdBy?.name || 'Unknown';
+      
+      if (!supplierMap.has(supplierId)) {
+        supplierMap.set(supplierId, {
+          supplierId,
+          supplierName,
+          total: 0,
+          approved: 0,
+          pending: 0
+        });
+      }
+      
+      const supplier = supplierMap.get(supplierId);
+      supplier.total++;
+      
+      if (q.status === 'Approved') {
+        supplier.approved++;
+      } else if (['Submitted', 'Under Review', 'Changes Requested'].includes(q.status)) {
+        supplier.pending++;
+      }
+    });
+
+    // Get recent activity (top 10 most recently updated)
+    const recentActivity = quotationsForStats
+      .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+      .slice(0, 10)
+      .map(q => ({
+        id: q._id,
+        title: q.title,
+        status: q.status,
+        supplier: q.createdBy?.name || 'Unknown',
+        updatedAt: q.updatedAt
+      }));
+
+    return {
+      totalQuotations: quotationsForStats.length,
+      byStatus: {
+        Submitted: quotationsForStats.filter(q => q.status === 'Submitted').length,
+        'Under Review': quotationsForStats.filter(q => q.status === 'Under Review').length,
+        'Changes Requested': quotationsForStats.filter(q => q.status === 'Changes Requested').length,
+        Approved: quotationsForStats.filter(q => q.status === 'Approved').length
+      },
+      bySupplier: Array.from(supplierMap.values()),
+      recentActivity
+    };
+  };
+
+  const stats = calculateStats();
 
   const statusCounts = {
     All: quotations.length,
@@ -71,12 +150,6 @@ const BuyerDashboard = () => {
             <p className="text-sm text-gray-600">Welcome, {user?.name}</p>
           </div>
           <div className="flex items-center space-x-4">
-            <button
-              onClick={() => navigate('/buyer/analytics')}
-              className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700"
-            >
-              Analytics
-            </button>
             <button
               onClick={() => navigate('/buyer/suppliers')}
               className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
@@ -101,6 +174,143 @@ const BuyerDashboard = () => {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Analytics Section */}
+        <div className="mb-8">
+          <h2 className="text-xl font-semibold text-gray-900 mb-4">Analytics Overview</h2>
+          
+          {/* Overview Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+            <div className="bg-white rounded-lg shadow p-6">
+              <h3 className="text-sm font-medium text-gray-500 mb-2">Total Quotations</h3>
+              <p className="text-3xl font-bold text-gray-900">
+                {loading ? '...' : (stats?.totalQuotations || 0)}
+              </p>
+            </div>
+            <div className="bg-white rounded-lg shadow p-6">
+              <h3 className="text-sm font-medium text-gray-500 mb-2">Approved</h3>
+              <p className="text-3xl font-bold text-green-600">
+                {loading ? '...' : (stats?.byStatus?.Approved || 0)}
+              </p>
+            </div>
+            <div className="bg-white rounded-lg shadow p-6">
+              <h3 className="text-sm font-medium text-gray-500 mb-2">Pending Review</h3>
+              <p className="text-3xl font-bold text-yellow-600">
+                {loading ? '...' : ((stats?.byStatus?.['Under Review'] || 0) + (stats?.byStatus?.Submitted || 0))}
+              </p>
+            </div>
+            <div className="bg-white rounded-lg shadow p-6">
+              <h3 className="text-sm font-medium text-gray-500 mb-2">Changes Requested</h3>
+              <p className="text-3xl font-bold text-orange-600">
+                {loading ? '...' : (stats?.byStatus?.['Changes Requested'] || 0)}
+              </p>
+            </div>
+          </div>
+
+          {/* Status Breakdown */}
+          {/* {!loading && stats && stats.totalQuotations > 0 && (
+            <div className="bg-white rounded-lg shadow p-6 mb-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Status Breakdown</h3>
+              <div className="space-y-4">
+                {stats.byStatus && Object.entries(stats.byStatus).map(([status, count]) => (
+                  <div key={status} className="flex items-center">
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-medium text-gray-700">{status}</span>
+                        <span className="text-sm font-semibold text-gray-900">{count}</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div
+                          className={`h-2 rounded-full ${getStatusColor(status)}`}
+                          style={{
+                            width: `${stats.totalQuotations > 0 ? (count / stats.totalQuotations) * 100 : 0}%`
+                          }}
+                        ></div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )} */}
+
+          {/* Supplier Performance */}
+          {!loading && stats?.bySupplier && stats.bySupplier.length > 0 && (
+            <div className="bg-white rounded-lg shadow p-6 mb-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Supplier Performance</h3>
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Supplier
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Total
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Approved
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Pending
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Approval Rate
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {stats.bySupplier.map((supplier) => (
+                      <tr key={supplier.supplierId}>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                          {supplier.supplierName}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {supplier.total}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-green-600">
+                          {supplier.approved}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-yellow-600">
+                          {supplier.pending}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {supplier.total > 0
+                            ? `${Math.round((supplier.approved / supplier.total) * 100)}%`
+                            : '0%'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Recent Activity */}
+          {/* {!loading && stats?.recentActivity && stats.recentActivity.length > 0 && (
+            <div className="bg-white rounded-lg shadow p-6 mb-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Recent Activity</h3>
+              <div className="space-y-3">
+                {stats.recentActivity.map((activity) => (
+                  <div
+                    key={activity.id}
+                    className="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer"
+                    onClick={() => handleViewQuotation(activity.id)}
+                  >
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-gray-900">{activity.title}</p>
+                      <p className="text-xs text-gray-500">
+                        {activity.supplier} • {format(new Date(activity.updatedAt), 'MMM d, yyyy HH:mm')}
+                      </p>
+                    </div>
+                    <ApprovalStatusBadge status={activity.status} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )} */}
+        </div>
+
         <h2 className="text-xl font-semibold text-gray-900 mb-6">All Quotations</h2>
 
         {/* Search and Filters */}
