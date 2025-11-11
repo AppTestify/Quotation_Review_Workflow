@@ -50,8 +50,43 @@ const QuotationDetail = () => {
   useEffect(() => {
     if (quotation && quotation.versions && quotation.versions.length > 0) {
       const latest = quotation.versions[quotation.versions.length - 1];
+      // Update activeVersion to the latest version from the fetched quotation
+      // This ensures we always use the most up-to-date version data
       setActiveVersion(latest);
-      setAnnotations(latest.annotations || []);
+      // Load annotations from the latest version
+      const versionAnnotations = latest.annotations || [];
+      // Ensure annotations is an array and normalize the data
+      const normalizedAnnotations = Array.isArray(versionAnnotations) 
+        ? versionAnnotations.map((ann, index) => ({
+            ...ann,
+            // Ensure all numeric fields are properly typed
+            page: typeof ann.page === 'number' ? ann.page : parseInt(ann.page) || 1,
+            x: typeof ann.x === 'number' ? ann.x : (ann.x ? parseFloat(ann.x) : undefined),
+            y: typeof ann.y === 'number' ? ann.y : (ann.y ? parseFloat(ann.y) : undefined),
+            startX: typeof ann.startX === 'number' ? ann.startX : (ann.startX ? parseFloat(ann.startX) : undefined),
+            startY: typeof ann.startY === 'number' ? ann.startY : (ann.startY ? parseFloat(ann.startY) : undefined),
+            endX: typeof ann.endX === 'number' ? ann.endX : (ann.endX ? parseFloat(ann.endX) : undefined),
+            endY: typeof ann.endY === 'number' ? ann.endY : (ann.endY ? parseFloat(ann.endY) : undefined),
+            strokeWidth: typeof ann.strokeWidth === 'number' ? ann.strokeWidth : (ann.strokeWidth ? parseFloat(ann.strokeWidth) : undefined),
+            fontSize: typeof ann.fontSize === 'number' ? ann.fontSize : (ann.fontSize ? parseFloat(ann.fontSize) : undefined),
+            textFontSize: typeof ann.textFontSize === 'number' ? ann.textFontSize : (ann.textFontSize ? parseFloat(ann.textFontSize) : undefined),
+            width: typeof ann.width === 'number' ? ann.width : (ann.width ? parseFloat(ann.width) : undefined),
+            height: typeof ann.height === 'number' ? ann.height : (ann.height ? parseFloat(ann.height) : undefined),
+            // Preserve all other properties
+            id: ann.id || `ann_${index}`,
+            type: ann.type,
+            color: ann.color,
+            text: ann.text,
+            fontFamily: ann.fontFamily,
+            fillColor: ann.fillColor,
+            textColor: ann.textColor,
+            textFontFamily: ann.textFontFamily,
+            imageData: ann.imageData,
+            path: ann.path,
+            createdAt: ann.createdAt
+          }))
+        : [];
+      setAnnotations(normalizedAnnotations);
       // Handle both array and string (for backward compatibility)
       if (Array.isArray(latest.comments)) {
         setComments(latest.comments);
@@ -76,7 +111,13 @@ const QuotationDetail = () => {
   };
 
   const handleAnnotationAdd = (annotation) => {
-    setAnnotations([...annotations, annotation]);
+    // Add unique ID and timestamp to annotation if not present
+    const annotationWithId = {
+      ...annotation,
+      id: annotation.id || `ann_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      createdAt: annotation.createdAt || new Date().toISOString()
+    };
+    setAnnotations([...annotations, annotationWithId]);
   };
 
   const handleUndo = () => {
@@ -87,13 +128,45 @@ const QuotationDetail = () => {
 
   const handleSaveAnnotations = async () => {
     try {
-      await annotateQuotation(id, null, annotations);
-      await fetchQuotation();
+      // Ensure all annotations have required fields and are properly structured
+      const normalizedAnnotations = annotations.map((ann, index) => ({
+        ...ann,
+        id: ann.id || `ann_${Date.now()}_${index}`,
+        // Ensure all coordinate fields are numbers
+        page: typeof ann.page === 'number' ? ann.page : parseInt(ann.page) || 1,
+        x: typeof ann.x === 'number' ? ann.x : parseFloat(ann.x) || 0,
+        y: typeof ann.y === 'number' ? ann.y : parseFloat(ann.y) || 0,
+        startX: typeof ann.startX === 'number' ? ann.startX : (ann.startX ? parseFloat(ann.startX) : undefined),
+        startY: typeof ann.startY === 'number' ? ann.startY : (ann.startY ? parseFloat(ann.startY) : undefined),
+        endX: typeof ann.endX === 'number' ? ann.endX : (ann.endX ? parseFloat(ann.endX) : undefined),
+        endY: typeof ann.endY === 'number' ? ann.endY : (ann.endY ? parseFloat(ann.endY) : undefined),
+        // Preserve all other properties
+        type: ann.type,
+        color: ann.color,
+        strokeWidth: ann.strokeWidth,
+        text: ann.text,
+        fontFamily: ann.fontFamily,
+        fontSize: ann.fontSize,
+        fillColor: ann.fillColor,
+        textColor: ann.textColor,
+        textFontFamily: ann.textFontFamily,
+        textFontSize: ann.textFontSize,
+        imageData: ann.imageData,
+        width: ann.width,
+        height: ann.height,
+        path: ann.path,
+        createdAt: ann.createdAt || new Date().toISOString()
+      }));
+      
+      await annotateQuotation(id, null, normalizedAnnotations);
+      // Refetch quotation to get updated annotations from backend
+      const updatedQuotation = await getQuotation(id);
+      setQuotation(updatedQuotation);
       await fetchActivityHistory();
       alert('Annotations saved successfully!');
     } catch (error) {
       console.error('Error saving annotations:', error);
-      alert('Failed to save annotations');
+      alert('Failed to save annotations: ' + (error.response?.data?.message || error.message));
     }
   };
 
@@ -188,7 +261,39 @@ const QuotationDetail = () => {
 
   const handleVersionSelect = (version) => {
     setActiveVersion(version);
-    setAnnotations(version.annotations || []);
+    // Ensure annotations is an array and normalize the data
+    const versionAnnotations = version.annotations || [];
+    const normalizedAnnotations = Array.isArray(versionAnnotations)
+      ? versionAnnotations.map((ann, index) => ({
+          ...ann,
+          // Ensure all numeric fields are properly typed
+          page: typeof ann.page === 'number' ? ann.page : parseInt(ann.page) || 1,
+          x: typeof ann.x === 'number' ? ann.x : (ann.x ? parseFloat(ann.x) : undefined),
+          y: typeof ann.y === 'number' ? ann.y : (ann.y ? parseFloat(ann.y) : undefined),
+          startX: typeof ann.startX === 'number' ? ann.startX : (ann.startX ? parseFloat(ann.startX) : undefined),
+          startY: typeof ann.startY === 'number' ? ann.startY : (ann.startY ? parseFloat(ann.startY) : undefined),
+          endX: typeof ann.endX === 'number' ? ann.endX : (ann.endX ? parseFloat(ann.endX) : undefined),
+          endY: typeof ann.endY === 'number' ? ann.endY : (ann.endY ? parseFloat(ann.endY) : undefined),
+          strokeWidth: typeof ann.strokeWidth === 'number' ? ann.strokeWidth : (ann.strokeWidth ? parseFloat(ann.strokeWidth) : undefined),
+          fontSize: typeof ann.fontSize === 'number' ? ann.fontSize : (ann.fontSize ? parseFloat(ann.fontSize) : undefined),
+          textFontSize: typeof ann.textFontSize === 'number' ? ann.textFontSize : (ann.textFontSize ? parseFloat(ann.textFontSize) : undefined),
+          width: typeof ann.width === 'number' ? ann.width : (ann.width ? parseFloat(ann.width) : undefined),
+          height: typeof ann.height === 'number' ? ann.height : (ann.height ? parseFloat(ann.height) : undefined),
+          // Preserve all other properties
+          id: ann.id || `ann_${index}`,
+          type: ann.type,
+          color: ann.color,
+          text: ann.text,
+          fontFamily: ann.fontFamily,
+          fillColor: ann.fillColor,
+          textColor: ann.textColor,
+          textFontFamily: ann.textFontFamily,
+          imageData: ann.imageData,
+          path: ann.path,
+          createdAt: ann.createdAt
+        }))
+      : [];
+    setAnnotations(normalizedAnnotations);
     // Handle both array and string (for backward compatibility)
     if (Array.isArray(version.comments)) {
       setComments(version.comments);

@@ -510,11 +510,16 @@ router.post('/:id/annotate', auth, requireRole('buyer'), async (req, res) => {
     // Update annotations only if explicitly provided (preserve existing if not provided)
     const oldAnnotations = latestVersion.annotations;
     if (annotations !== undefined && annotations !== null) {
-      latestVersion.annotations = annotations;
+      // Ensure annotations is an array
+      const normalizedAnnotations = Array.isArray(annotations) ? annotations : [];
+      latestVersion.annotations = normalizedAnnotations;
+      
+      // Mark the annotations field as modified (critical for Mongoose to save nested objects)
+      latestVersion.markModified('annotations');
       
       // Add history entry only if annotations actually changed
-      if (JSON.stringify(annotations) !== JSON.stringify(oldAnnotations)) {
-        const annotationCount = Array.isArray(annotations) ? annotations.length : 0;
+      if (JSON.stringify(normalizedAnnotations) !== JSON.stringify(oldAnnotations)) {
+        const annotationCount = normalizedAnnotations.length;
         addHistoryEntry(
           quotationDoc,
           'annotations_saved',

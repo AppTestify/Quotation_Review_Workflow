@@ -19,6 +19,7 @@ const PDFViewer = ({ pdfUrl, annotations = [], onAnnotationAdd, onUndo, readOnly
   const containerRef = useRef(null);
   const [startPos, setStartPos] = useState(null);
   const [drawingPath, setDrawingPath] = useState([]);
+  const [pagesRendered, setPagesRendered] = useState(0);
   
   // Font and styling options
   const [fontFamily, setFontFamily] = useState('Arial');
@@ -133,6 +134,7 @@ const PDFViewer = ({ pdfUrl, annotations = [], onAnnotationAdd, onUndo, readOnly
   }, [isFullscreen]);
 
   // Update canvas sizes when pages are rendered
+  // Note: Canvas sizing is now handled in the annotation drawing useEffect to ensure synchronization
   useEffect(() => {
     if (!numPages || pageRefs.length === 0) return;
     
@@ -422,10 +424,18 @@ const PDFViewer = ({ pdfUrl, annotations = [], onAnnotationAdd, onUndo, readOnly
   };
 
   const drawAnnotations = (ctx, pageAnnotations) => {
+    if (!pageAnnotations || pageAnnotations.length === 0) return;
+    
     pageAnnotations.forEach((ann) => {
+      if (!ann || !ann.type) return;
+      
       ctx.save();
       
       if (ann.type === 'highlight') {
+        if (ann.startX === undefined || ann.startY === undefined || ann.endX === undefined || ann.endY === undefined) {
+          ctx.restore();
+          return;
+        }
         ctx.globalAlpha = 0.3;
         ctx.fillStyle = ann.color || 'yellow';
         ctx.fillRect(ann.startX, ann.startY, ann.endX - ann.startX, ann.endY - ann.startY);
@@ -439,6 +449,10 @@ const PDFViewer = ({ pdfUrl, annotations = [], onAnnotationAdd, onUndo, readOnly
           }
         }
       } else if (ann.type === 'rectangle') {
+        if (ann.startX === undefined || ann.startY === undefined || ann.endX === undefined || ann.endY === undefined) {
+          ctx.restore();
+          return;
+        }
         const width = ann.endX - ann.startX;
         const height = ann.endY - ann.startY;
         
@@ -489,6 +503,10 @@ const PDFViewer = ({ pdfUrl, annotations = [], onAnnotationAdd, onUndo, readOnly
           }
         }
       } else if (ann.type === 'arrow') {
+        if (ann.startX === undefined || ann.startY === undefined || ann.endX === undefined || ann.endY === undefined) {
+          ctx.restore();
+          return;
+        }
         drawArrow(ctx, ann.startX, ann.startY, ann.endX, ann.endY, ann.color || '#000000', ann.strokeWidth || 2);
       } else if (ann.type === 'freedraw' && ann.path && ann.path.length > 0) {
         ctx.strokeStyle = ann.color || '#000000';
@@ -502,10 +520,18 @@ const PDFViewer = ({ pdfUrl, annotations = [], onAnnotationAdd, onUndo, readOnly
         }
         ctx.stroke();
       } else if (ann.type === 'text') {
+        if (ann.x === undefined || ann.y === undefined || !ann.text) {
+          ctx.restore();
+          return;
+        }
         ctx.fillStyle = ann.color || '#000000';
         ctx.font = `${ann.fontSize || 14}px ${ann.fontFamily || 'Arial'}`;
         ctx.fillText(ann.text, ann.x, ann.y);
       } else if (ann.type === 'comment') {
+        if (ann.x === undefined || ann.y === undefined) {
+          ctx.restore();
+          return;
+        }
         ctx.fillStyle = 'blue';
         ctx.beginPath();
         ctx.arc(ann.x, ann.y, 5, 0, 2 * Math.PI);
@@ -523,91 +549,137 @@ const PDFViewer = ({ pdfUrl, annotations = [], onAnnotationAdd, onUndo, readOnly
 
   useEffect(() => {
     // Draw annotations on each page's canvas
-    canvasRefs.forEach((canvasRef, pageIndex) => {
-      const canvas = canvasRef?.current;
-      if (!canvas) return;
-      
-      const pageElement = pageRefs[pageIndex]?.current;
-      if (!pageElement) return;
-      
-      const ctx = canvas.getContext('2d');
-      
-      // Clear canvas
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
-      const pageNum = pageIndex + 1;
-      const pageAnnotations = annotations.filter(ann => ann.page === pageNum);
-      drawAnnotations(ctx, pageAnnotations);
-      
-      // Load and draw stamp images
-      pageAnnotations
-        .filter(ann => ann.type === 'stamp' && ann.imageData)
-        .forEach((ann) => {
-          const imageKey = ann.imageData.substring(0, 50);
-          if (loadedImages.has(imageKey)) {
-            const img = loadedImages.get(imageKey);
-            if (img.complete) {
-              ctx.drawImage(img, ann.x, ann.y, ann.width || 100, ann.height || 100);
-            }
-          } else {
-            const img = new Image();
-            img.onload = () => {
-              setLoadedImages(prev => {
-                const newMap = new Map(prev);
-                newMap.set(imageKey, img);
-                return newMap;
-              });
-              // Redraw annotations for this page
-              setTimeout(() => {
-                const canvas = canvasRefs[pageIndex]?.current;
-                if (!canvas) return;
-                const ctx = canvas.getContext('2d');
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                const currentPageAnnotations = annotations.filter(a => a.page === pageNum);
-                drawAnnotations(ctx, currentPageAnnotations);
-                ctx.drawImage(img, ann.x, ann.y, ann.width || 100, ann.height || 100);
-              }, 0);
-            };
-            img.src = ann.imageData;
+    if (!numPages || canvasRefs.length === 0 || pageRefs.length === 0) return;
+    
+    const drawAllAnnotations = () => {
+      canvasRefs.forEach((canvasRef, pageIndex) => {
+        const canvas = canvasRef?.current;
+        if (!canvas) return;
+        
+        const pageElement = pageRefs[pageIndex]?.current;
+        if (!pageElement) return;
+        
+        // Ensure canvas is properly sized
+        const rect = pageElement.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          // Only update if size changed to avoid unnecessary redraws
+          if (canvas.width !== rect.width || canvas.height !== rect.height) {
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+            canvas.style.width = `${rect.width}px`;
+            canvas.style.height = `${rect.height}px`;
           }
+        }
+        
+        const ctx = canvas.getContext('2d');
+        
+        // Clear canvas
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        const pageNum = pageIndex + 1;
+        // Handle both string and number page values
+        const pageAnnotations = annotations.filter(ann => {
+          if (!ann || !ann.page) return false;
+          const annPage = typeof ann.page === 'string' ? parseInt(ann.page) : ann.page;
+          return annPage === pageNum;
         });
-      
-      // Draw current annotation being drawn on this page
-      if (currentAnnotation && currentAnnotation.page === pageNum) {
-        drawAnnotations(ctx, [currentAnnotation]);
-      }
-      
-      if (drawingType === 'freedraw' && drawingPath.length > 0 && startPos && startPos.page === pageNum) {
-        ctx.save();
-        ctx.strokeStyle = strokeColor;
-        ctx.lineWidth = strokeWidth;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.beginPath();
-        ctx.moveTo(drawingPath[0].x, drawingPath[0].y);
-        for (let i = 1; i < drawingPath.length; i++) {
-          ctx.lineTo(drawingPath[i].x, drawingPath[i].y);
+        
+        // Draw annotations for this page
+        if (pageAnnotations.length > 0) {
+          drawAnnotations(ctx, pageAnnotations);
         }
-        ctx.stroke();
-        ctx.restore();
-      }
       
-      // Draw pending rectangle on this page
-      if (pendingRectangle && !showRectangleTextInput && pendingRectangle.page === pageNum) {
-        const width = pendingRectangle.endX - pendingRectangle.startX;
-        const height = pendingRectangle.endY - pendingRectangle.startY;
-        ctx.save();
-        if (pendingRectangle.fillColor) {
-          ctx.fillStyle = pendingRectangle.fillColor;
-          ctx.fillRect(pendingRectangle.startX, pendingRectangle.startY, width, height);
+        // Load and draw stamp images
+        pageAnnotations
+          .filter(ann => ann.type === 'stamp' && ann.imageData)
+          .forEach((ann) => {
+            const imageKey = ann.imageData.substring(0, 50);
+            if (loadedImages.has(imageKey)) {
+              const img = loadedImages.get(imageKey);
+              if (img.complete) {
+                ctx.drawImage(img, ann.x, ann.y, ann.width || 100, ann.height || 100);
+              }
+            } else {
+              const img = new Image();
+              img.onload = () => {
+                setLoadedImages(prev => {
+                  const newMap = new Map(prev);
+                  newMap.set(imageKey, img);
+                  return newMap;
+                });
+                // Redraw annotations for this page
+                setTimeout(() => {
+                  const canvas = canvasRefs[pageIndex]?.current;
+                  if (!canvas) return;
+                  const ctx = canvas.getContext('2d');
+                  ctx.clearRect(0, 0, canvas.width, canvas.height);
+                  const annPage = typeof ann.page === 'string' ? parseInt(ann.page) : ann.page;
+                  const currentPageAnnotations = annotations.filter(a => {
+                    const aPage = typeof a.page === 'string' ? parseInt(a.page) : a.page;
+                    return aPage === pageNum;
+                  });
+                  drawAnnotations(ctx, currentPageAnnotations);
+                  ctx.drawImage(img, ann.x, ann.y, ann.width || 100, ann.height || 100);
+                }, 0);
+              };
+              img.src = ann.imageData;
+            }
+          });
+        
+        // Draw current annotation being drawn on this page
+        if (currentAnnotation) {
+          const currentPage = typeof currentAnnotation.page === 'string' ? parseInt(currentAnnotation.page) : currentAnnotation.page;
+          if (currentPage === pageNum) {
+            drawAnnotations(ctx, [currentAnnotation]);
+          }
         }
-        ctx.strokeStyle = pendingRectangle.color;
-        ctx.lineWidth = pendingRectangle.strokeWidth;
-        ctx.strokeRect(pendingRectangle.startX, pendingRectangle.startY, width, height);
-        ctx.restore();
-      }
-    });
-  }, [annotations, currentAnnotation, drawingPath, drawingType, strokeColor, strokeWidth, pendingRectangle, showRectangleTextInput, loadedImages, startPos, canvasRefs, pageRefs]);
+        
+        if (drawingType === 'freedraw' && drawingPath.length > 0 && startPos) {
+          const startPage = typeof startPos.page === 'string' ? parseInt(startPos.page) : startPos.page;
+          if (startPage === pageNum) {
+            ctx.save();
+            ctx.strokeStyle = strokeColor;
+            ctx.lineWidth = strokeWidth;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.beginPath();
+            ctx.moveTo(drawingPath[0].x, drawingPath[0].y);
+            for (let i = 1; i < drawingPath.length; i++) {
+              ctx.lineTo(drawingPath[i].x, drawingPath[i].y);
+            }
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
+        
+        // Draw pending rectangle on this page
+        if (pendingRectangle && !showRectangleTextInput) {
+          const rectPage = typeof pendingRectangle.page === 'string' ? parseInt(pendingRectangle.page) : pendingRectangle.page;
+          if (rectPage === pageNum) {
+            const width = pendingRectangle.endX - pendingRectangle.startX;
+            const height = pendingRectangle.endY - pendingRectangle.startY;
+            ctx.save();
+            if (pendingRectangle.fillColor) {
+              ctx.fillStyle = pendingRectangle.fillColor;
+              ctx.fillRect(pendingRectangle.startX, pendingRectangle.startY, width, height);
+            }
+            ctx.strokeStyle = pendingRectangle.color;
+            ctx.lineWidth = pendingRectangle.strokeWidth;
+            ctx.strokeRect(pendingRectangle.startX, pendingRectangle.startY, width, height);
+            ctx.restore();
+          }
+        }
+      });
+    };
+    
+    // Draw immediately
+    drawAllAnnotations();
+    
+    // Also draw after a short delay to ensure PDF pages are fully rendered
+    const timeout = setTimeout(drawAllAnnotations, 200);
+    
+    return () => clearTimeout(timeout);
+  }, [annotations, currentAnnotation, drawingPath, drawingType, strokeColor, strokeWidth, pendingRectangle, showRectangleTextInput, loadedImages, startPos, canvasRefs, pageRefs, numPages, scale, pageWidth, pagesRendered]);
 
   return (
     <div className={`flex flex-col h-full ${isFullscreen ? 'bg-gray-800' : ''}`} ref={viewerRef}>
@@ -879,11 +951,15 @@ const PDFViewer = ({ pdfUrl, annotations = [], onAnnotationAdd, onUndo, readOnly
                     scale={pageWidth ? undefined : scale}
                     renderTextLayer={true}
                     renderAnnotationLayer={true}
+                    onRenderSuccess={() => {
+                      // Trigger annotation redraw when page is rendered
+                      setPagesRendered(prev => prev + 1);
+                    }}
                   />
                   <canvas
                     ref={canvasRefs[index]}
                     className="absolute top-0 left-0 pointer-events-none"
-                    style={{ zIndex: 10 }}
+                    style={{ zIndex: 10, position: 'absolute' }}
                   />
                 </div>
               );
